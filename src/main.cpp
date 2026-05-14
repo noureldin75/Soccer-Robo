@@ -1,18 +1,20 @@
 #include <Arduino.h>
-
-// put function declarations here:
-int myFunction(int, int);
+#include "config.h"
+#include "motors.h"
+#include "rc.h"
 
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+    Serial.begin(115200);
+    Serial.println("Soccer Robot starting up...");
+
+    setup_motors();
+    setup_rc();
+
+    Serial.println("ready to go");
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-}
-
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+    process_rc();
+    check_watchdog();
+    delay(LOOP_DELAY_MS);
 }
