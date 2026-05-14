@@ -59,7 +59,9 @@ Download and install from [code.visualstudio.com](https://code.visualstudio.com/
 1. File → Open Folder
 2. Navigate to this project folder (`Soccer Robo`)
 3. Open it — PlatformIO should detect the `platformio.ini` automatically
-4. Wait for PlatformIO to download the ESP32 platform and libraries (first time only, takes a few minutes)
+4. Wait for PlatformIO to download the ESP32 platform (first time only, takes a few minutes)
+
+**Important:** Bluepad32 is not a regular library. It replaces the entire ESP32 Arduino core with a custom build that includes the Bluetooth gamepad stack. The first build will download a ~200MB zip file from GitHub — this is normal. If you see a red squiggly on `#include <Bluepad32.h>` before your first build, that's expected — it goes away after PlatformIO downloads the custom framework.
 
 ### 4. Connect the ESP32
 
