@@ -3,10 +3,10 @@
 
 #include <Arduino.h>
 
-// sets up bluetooth and registers the gamepad callbacks, call in setup()
+// starts the WiFi access point and web server, call in setup()
 void setup_rc();
 
-// reads the gamepad, does the arcade drive math, and sends speeds to the motors
+// handles incoming web server requests, call every loop()
 void process_rc();
 
 #endif

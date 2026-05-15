@@ -2,66 +2,122 @@
 #include "motors.h"
 #include "rc.h"
 #include <Arduino.h>
-#include <Bluepad32.h>
+#include <WiFi.h>
+#include <WebServer.h>
 
-static GamepadPtr myGamepad = nullptr;
+// --- WiFi AP credentials ---
+// phone connects to this hotspot directly, no router needed
+static const char* AP_SSID = "SoccerRobot";
+static const char* AP_PASS = "12345678";   // min 8 chars for WPA2
 
-// filters out tiny joystick values so the robot doesn't drift when you let go
-static int apply_deadzone(int value) {
-    return (abs(value) < JOYSTICK_DEADZONE) ? 0 : value;
+static WebServer server(80);
+
+// last command, held until a new one arrives
+static char current_cmd = 'S';
+
+// ---------- route handlers ----------
+
+// ESPiX sends GET requests like:  /cmd?var=F
+// We also handle the older style:  /F  (direct path)
+static void handle_cmd(char cmd) {
+    if (cmd == 'F' || cmd == 'B' || cmd == 'L' || cmd == 'R' || cmd == 'S') {
+        if (cmd != current_cmd) {
+            Serial.printf("[RC] cmd: %c\n", cmd);
+            current_cmd = cmd;
+        }
+    } else if (cmd == 'H') {
+        Serial.println("[RC] HORN");
+    } else if (cmd == 'G') {
+        Serial.println("[RC] LIGHT");
+    }
+    server.send(200, "text/plain", "OK");
 }
 
-// called automatically when a controller pairs
-static void onConnectedGamepad(GamepadPtr gp) {
-    if (myGamepad == nullptr) {
-        myGamepad = gp;
-        Serial.println("[RC] gamepad connected");
+// ESPiX Robot Control app hits /cmd?var=X
+static void on_cmd() {
+    if (server.hasArg("var")) {
+        String val = server.arg("var");
+        if (val.length() > 0) handle_cmd((char)val[0]);
     } else {
-        Serial.println("[RC] another gamepad tried to connect, ignoring");
+        server.send(400, "text/plain", "missing var");
     }
 }
 
-// called if the controller disconnects (battery died, out of range, etc)
-static void onDisconnectedGamepad(GamepadPtr gp) {
-    if (myGamepad == gp) {
-        myGamepad = nullptr;
-        stop_all_motors();  // don't let the robot keep going without a controller!
-        Serial.println("[RC] gamepad lost, motors stopped");
+// Some ESPiX versions hit the command as the path directly: /F /B /L /R /S
+static void on_forward()  { handle_cmd('F'); }
+static void on_backward() { handle_cmd('B'); }
+static void on_left()     { handle_cmd('L'); }
+static void on_right()    { handle_cmd('R'); }
+static void on_stop()     { handle_cmd('S'); }
+static void on_horn()     { handle_cmd('H'); }
+static void on_light()    { handle_cmd('G'); }
+
+// catch-all so the app doesn't get a 404 and give up
+static void on_not_found() {
+    String uri = server.uri();
+    Serial.printf("[RC] unknown path: %s\n", uri.c_str());
+
+    // try to pull a command out of the path itself (e.g. "/F")
+    if (uri.length() == 2) {
+        handle_cmd((char)uri[1]);
+        return;
     }
+    server.send(200, "text/plain", "OK");
 }
+
+// ---------- setup / loop ----------
 
 void setup_rc() {
-    Serial.println("[RC] starting bluetooth...");
-    BP32.setup(&onConnectedGamepad, &onDisconnectedGamepad);
-    BP32.forgetBluetoothKeys();  // clear old pairings so any controller can connect
-    Serial.println("[RC] waiting for gamepad...");
+    Serial.println("[RC] starting WiFi AP...");
+    WiFi.softAP(AP_SSID, AP_PASS);
+    Serial.printf("[RC] AP ready — connect your phone to '%s'\n", AP_SSID);
+    Serial.printf("[RC] robot IP: %s\n", WiFi.softAPIP().toString().c_str());
+
+    // register routes
+    server.on("/cmd",      HTTP_GET, on_cmd);
+    server.on("/F",        HTTP_GET, on_forward);
+    server.on("/B",        HTTP_GET, on_backward);
+    server.on("/L",        HTTP_GET, on_left);
+    server.on("/R",        HTTP_GET, on_right);
+    server.on("/S",        HTTP_GET, on_stop);
+    server.on("/H",        HTTP_GET, on_horn);
+    server.on("/G",        HTTP_GET, on_light);
+    server.onNotFound(on_not_found);
+
+    server.begin();
+    Serial.println("[RC] web server started on port 80");
 }
 
 void process_rc() {
-    BP32.update();  // needs to run every loop for bluetooth to work
+    server.handleClient();   // must run every loop to handle HTTP requests
 
-    if (myGamepad == nullptr || !myGamepad->isConnected()) {
-        drive_robot(0, 0);  // no controller = slow down to stop
-        return;
+    // convert current command to motor targets
+    int left  = 0;
+    int right = 0;
+
+    switch (current_cmd) {
+        case 'F':                        // forward
+            left  =  MAX_PWM;
+            right =  MAX_PWM;
+            break;
+        case 'B':                        // backward
+            left  = -MAX_PWM;
+            right = -MAX_PWM;
+            break;
+        case 'L':                        // pivot left
+            left  = -MAX_PWM;
+            right =  MAX_PWM;
+            break;
+        case 'R':                        // pivot right
+            left  =  MAX_PWM;
+            right = -MAX_PWM;
+            break;
+        case 'S':                        // stop
+        default:
+            left  = 0;
+            right = 0;
+            break;
     }
 
-    // read the left stick
-    // bluepad gives values from -511 to 512
-    int raw_y = myGamepad->axisY();  // up is negative which is weird
-    int raw_x = myGamepad->axisX();
-
-    raw_y = -raw_y;  // flip it so pushing up = positive = forward
-
-    int axis_y = apply_deadzone(raw_y);
-    int axis_x = apply_deadzone(raw_x);
-
-    // scale joystick range to our PWM range
-    int mapped_y = map(axis_y, -512, 512, -MAX_PWM, MAX_PWM);
-    int mapped_x = map(axis_x, -512, 512, -MAX_PWM, MAX_PWM);
-
-    // arcade drive: left = Y+X, right = Y-X
-    int target_left  = constrain(mapped_y + mapped_x, -MAX_PWM, MAX_PWM);
-    int target_right = constrain(mapped_y - mapped_x, -MAX_PWM, MAX_PWM);
-
-    drive_robot(target_left, target_right);
+    drive_robot(left, right);
 }
