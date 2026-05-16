@@ -20,6 +20,10 @@ static inline int sign(int x) {
 }
 
 // sets up one motor's pins and PWM channel
+// For L298N: pwm_pin = ENA or ENB, in1/in2 = direction pins
+// IMPORTANT: the ENA/ENB jumper on the L298N board MUST be removed,
+//            otherwise the enable pin is permanently tied HIGH and
+//            you lose all speed control.
 static void init_motor(int pwm_pin, int pwm_channel, int in1_pin, int in2_pin) {
     pinMode(in1_pin, OUTPUT);
     pinMode(in2_pin, OUTPUT);
@@ -40,23 +44,24 @@ static void brake_motor(int pwm_channel, int in1_pin, int in2_pin) {
 }
 
 void setup_motors() {
-    // STBY is hardwired to 5V on the PCB so we skip that
+    // L298N has no STBY/standby pin, nothing to configure there
 
-    // left side
+    // left side (L298N module #1)
     init_motor(MOT1_PWM_PIN, MOT1_PWM_CH, MOT1_IN1_PIN, MOT1_IN2_PIN);
     init_motor(MOT2_PWM_PIN, MOT2_PWM_CH, MOT2_IN1_PIN, MOT2_IN2_PIN);
 
-    // right side
+    // right side (L298N module #2)
     init_motor(MOT3_PWM_PIN, MOT3_PWM_CH, MOT3_IN1_PIN, MOT3_IN2_PIN);
     init_motor(MOT4_PWM_PIN, MOT4_PWM_CH, MOT4_IN1_PIN, MOT4_IN2_PIN);
 
     last_drive_time_ms = millis();
-    Serial.println("[MOT] motors ready");
+    Serial.println("[MOT] L298N motors ready");
 }
 
 // if we're going forward and suddenly asked to go backward (or vice versa),
 // we don't jump straight there. we ramp down to 0 first, then ramp back up
 // in the new direction. protects the driver from sudden current spikes.
+// L298N is more sensitive to hard reversals than the TB6612 so this matters.
 int soft_start(int current, int target) {
     // check if we're trying to reverse direction
     if ((current > 0 && target < 0) || (current < 0 && target > 0)) {
@@ -83,12 +88,13 @@ int soft_start(int current, int target) {
 }
 
 // sends speed to one motor. handles direction pins and clamps the PWM.
-// also filters out really low duty cycles that would just make the motor
-// buzz without actually spinning (bad for the driver)
+// L298N note: IN1=HIGH, IN2=LOW → forward. IN1=LOW, IN2=HIGH → reverse.
+//             IN1=LOW,  IN2=LOW → coast (not brake). Same logic as TB6612.
 void set_motor(int pwm_channel, int in1_pin, int in2_pin, int speed) {
     int duty = min(abs(speed), MAX_PWM);
 
-    // too low to actually spin, just treat as 0
+    // L298N has a higher minimum threshold than TB6612 due to its internal
+    // voltage drop (~2V). Below MIN_PWM the motor stalls and draws excess current.
     if (duty > 0 && duty < MIN_PWM) {
         duty = 0;
         speed = 0;
